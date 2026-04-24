@@ -9,7 +9,7 @@ import cache_manager as cm
 from backend import (
     data as _load_csv, scale_data, run_kmeans, run_hierarchical,
     run_pca, compute_elbow_silhouette,
-    get_dendrogram_fig, recommend_playlists, FEATURES,
+    get_dendrogram_fig, recommend_playlists, interpret_cluster, compare_outliers, FEATURES,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -51,6 +51,12 @@ def _compute_and_save():
 
         status.write("🌲  Running Agglomerative Clustering (slowest step — ~1 min)…")
         _hc = run_hierarchical(_X_scaled)
+
+        status.write("🖼️  Generating and saving Dendrogram image…")
+        _fig_dendro = get_dendrogram_fig(_hc, truncate_mode='level', p=10)
+        import os
+        os.makedirs(cm.CACHE_DIR, exist_ok=True)
+        _fig_dendro.savefig(cm._cp("dendrogram.png"), bbox_inches="tight")
 
         status.write("💾  Saving everything to disk…")
         cm.save_all(_df, _X, _X_scaled, _scaler, _labels,
@@ -292,9 +298,14 @@ with tab3:
     st.markdown(
         "Dendrogram generated using **Agglomerative Clustering** with distance thresholds."
     )
-    # hc_model loaded from disk — no wait
-    fig_dendro = get_dendrogram_fig(hc_model, truncate_mode='level', p=10)
-    st.pyplot(fig_dendro)
+    # Dendrogram image loaded from disk — no wait
+    dendro_path = cm._cp("dendrogram.png")
+    import os
+    if os.path.exists(dendro_path):
+        from PIL import Image
+        st.image(Image.open(dendro_path), use_column_width=True)
+    else:
+        st.error("Dendrogram image not found. Please clear the cache and recompute.")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -359,6 +370,7 @@ with tab4:
                         'Match (%)':    round(r['score'] * 100, 1),
                         'Songs Found':  r['count'],
                         'Cluster Size': r['total_tracks'],
+                        'Matched Songs': "<br>".join(r['matched_songs']) if r['matched_songs'] else "None"
                     }
                     for r in results
                 ])
@@ -367,6 +379,7 @@ with tab4:
                     color='Match (%)', color_continuous_scale='Viridis',
                     title='Cluster Match Scores for Your Selected Songs',
                     text='Match (%)',
+                    hover_data={'Cluster Size': True, 'Songs Found': True, 'Matched Songs': True}
                 )
                 fig_scores.update_traces(texttemplate='%{text}%', textposition='outside')
                 fig_scores.update_layout(
@@ -385,6 +398,30 @@ with tab4:
                     f"**Cluster {cid}**, which contains **{best['total_tracks']:,}** "
                     "songs in total."
                 )
+
+                # --- Cluster Insights ---
+                insights = interpret_cluster(df_clustered, X_scaled, cid)
+                st.info(
+                    f"**Cluster {cid} Snapshot:**  \n"
+                    f"💡 **Distinctive Trait:** These songs have **{insights['distinctive_direction']} {insights['distinctive_feature']}** than average.  \n"
+                    f"🔗 **Cohesive Trait:** The most consistent feature joining these songs is their **{insights['cohesive_feature']}**."
+                )
+
+                # --- Outlier Splits ---
+                split_analysis = compare_outliers(df_clustered, X_scaled, selected_songs)
+                if split_analysis:
+                    cluster_names = [f"Cluster {c}" for c in split_analysis['clusters']]
+                    if len(cluster_names) == 2:
+                        c_str = f"{cluster_names[0]} and {cluster_names[1]}"
+                    else:
+                        c_str = ", ".join(cluster_names[:-1]) + f", and {cluster_names[-1]}"
+                        
+                    st.warning(
+                        f"🔀 **Split Analysis:** Your selected songs were split across {len(split_analysis['clusters'])} different clusters ({c_str}). "
+                        f"The main feature distinguishing these groups is their **{split_analysis['feature']}**."
+                    )
+                else:
+                    st.success("🎯 **Perfect Match:** All your selected songs fit perfectly into the same cluster!")
 
                 cluster_tracks = df_clustered[df_clustered['Cluster'] == cid]
                 col_pie, col_table = st.columns([1, 2])

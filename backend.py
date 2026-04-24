@@ -139,10 +139,12 @@ def recommend_playlists(df_with_clusters, selected_songs, k):
           'score'        : float,   # fraction of selected songs in cluster
           'count'        : int,     # number of selected songs in cluster
           'total_tracks' : int,     # total songs in cluster
+          'matched_songs': list[str], # list of matched song names
         }
     """
     name_col = 'track_name' if 'track_name' in df_with_clusters.columns else None
     cluster_counts = {i: 0 for i in range(k)}
+    cluster_matches = {i: [] for i in range(k)}
     found = 0
 
     for song in selected_songs:
@@ -154,6 +156,7 @@ def recommend_playlists(df_with_clusters, selected_songs, k):
         if not matches.empty:
             cid = int(matches.iloc[0]['Cluster'])
             cluster_counts[cid] += 1
+            cluster_matches[cid].append(song)
             found += 1
 
     if found == 0:
@@ -167,7 +170,75 @@ def recommend_playlists(df_with_clusters, selected_songs, k):
             'score':        count / found,
             'count':        count,
             'total_tracks': len(tracks_in_cluster),
+            'matched_songs': cluster_matches[cid],
         })
 
     results.sort(key=lambda x: x['score'], reverse=True)
     return results
+
+
+def interpret_cluster(df_with_clusters, X_scaled, cid):
+    """
+    Provide interpretable insights for a specific cluster.
+    
+    Returns
+    -------
+    dict with:
+        'distinctive_feature': feature that separates this cluster from others the most
+        'distinctive_direction': "higher" or "lower" than average
+        'cohesive_feature': feature that is most consistent (lowest variance) in this cluster
+    """
+    cluster_mask = df_with_clusters['Cluster'] == cid
+    X_cluster = X_scaled[cluster_mask]
+    
+    # 1. Distincting feature
+    means = np.mean(X_cluster, axis=0)
+    dist_idx = np.argmax(np.abs(means))
+    
+    # 2. Cohesive feature
+    stds = np.std(X_cluster, axis=0)
+    coh_idx = np.argmin(stds)
+    
+    return {
+        'distinctive_feature': FEATURES[dist_idx],
+        'distinctive_direction': "higher" if means[dist_idx] > 0 else "lower",
+        'cohesive_feature': FEATURES[coh_idx]
+    }
+
+
+def compare_outliers(df_with_clusters, X_scaled, selected_songs):
+    """
+    If selected songs land in multiple clusters, find the feature that best
+    separates those specific clusters (highest variance among their centroids).
+    """
+    clusters_present = []
+    name_col = 'track_name' if 'track_name' in df_with_clusters.columns else None
+    
+    for song in selected_songs:
+        if name_col:
+            matches = df_with_clusters[df_with_clusters[name_col] == song]
+        else:
+            matches = df_with_clusters[df_with_clusters.index == song]
+            
+        if not matches.empty:
+            cid = int(matches.iloc[0]['Cluster'])
+            if cid not in clusters_present:
+                clusters_present.append(cid)
+    
+    if len(clusters_present) <= 1:
+        return None
+        
+    centroids = []
+    for c in clusters_present:
+        c_mask = df_with_clusters['Cluster'] == c
+        c_mean = np.mean(X_scaled[c_mask], axis=0)
+        centroids.append(c_mean)
+        
+    centroids = np.array(centroids)
+    feature_variances = np.var(centroids, axis=0)
+    best_feat_idx = np.argmax(feature_variances)
+    
+    return {
+        'clusters': clusters_present,
+        'feature': FEATURES[best_feat_idx]
+    }

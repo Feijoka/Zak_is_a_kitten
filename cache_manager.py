@@ -40,6 +40,7 @@ def cache_is_valid() -> bool:
         "df.parquet", "X.parquet", "X_scaled.npy",
         "scaler.pkl", "labels_dict.pkl",
         "pca_components.npy", "elbow_sil.pkl", "hc_model.pkl",
+        "dendrogram.png",
         ".meta_mtime",
     ]
     if any(not os.path.isfile(_cp(f)) for f in required):
